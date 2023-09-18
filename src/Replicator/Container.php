@@ -32,7 +32,7 @@ class Container extends Nette\Forms\Container
 
 	public int $createDefault;
 
-	public string $containerClass = Nette\Forms\Container::class;
+	public string $containerClass = \Ciki\Forms\Container::class;
 
 	/** @var callable */
 	protected $factoryCallback;
