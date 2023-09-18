@@ -41,7 +41,7 @@ class Container extends Nette\Forms\Container
 
 	private array $created = [];
 
-	private ?array $httpPost;
+	private ?array $httpPost = null;
 
 
 	/**
