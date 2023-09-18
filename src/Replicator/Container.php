@@ -365,7 +365,7 @@ class Container extends Nette\Forms\Container
 
 	public function addContainer($name): Nette\Forms\Container
 	{
-		return $this[$name] = new Nette\Forms\Container();
+		return $this[$name] = new $this->containerClass;
 	}
 
 
