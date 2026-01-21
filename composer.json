@@ -21,16 +21,27 @@
 		"issues": "https://github.com/Kdyby/FormsReplicator/issues"
 	},
 	"require": {
-		"php": ">=7.1",
-		"nette/forms": "^3.0",
-		"nette/utils": "^3.0|^4.0"
+		"php": ">= 8.2",
+		"nette/forms": "^3.2.3",
+		"nette/utils": "^3.0 || ^4.0"
 	},
 	"require-dev": {
-		"nette/application": "^3.0@rc",
-		"nette/bootstrap": "^3.0@rc",
-		"nette/di": "^3.0@rc",
-		"tracy/tracy": "^2.6",
-		"nette/tester": "^2.2"
+		"nette/application": "^3.0",
+		"nette/bootstrap": "^3.0",
+		"nette/di": "^3.0",
+		"tracy/tracy": "^2.10.8",
+		"nette/tester": "^2.5",
+		"php-parallel-lint/php-console-highlighter": "^1.0",
+		"php-parallel-lint/php-parallel-lint": "^1.4",
+		"phpstan/phpstan": "^2.1",
+		"phpstan/phpstan-deprecation-rules": "^2.0",
+		"phpstan/phpstan-nette": "^2.0",
+		"rector/rector": "^2.0",
+		"symplify/easy-coding-standard": "^12.5",
+		"nette/neon": "^3.4.4"
+	},
+	"conflict": {
+		"nette/component-model": "<3.1.0"
 	},
 	"autoload": {
 		"psr-4": {
@@ -47,7 +58,15 @@
 	},
 	"extra": {
 		"branch-alias": {
-			"dev-master": "2.0-dev"
+			"dev-master": "3.0-dev"
 		}
+	},
+	"scripts": {
+		"lint": "php ./vendor/bin/parallel-lint -e php,phpt --exclude ./.git --exclude ./vendor .",
+		"phpstan": "php ./vendor/bin/phpstan --ansi",
+		"ecs": "php ./vendor/bin/ecs",
+		"rector": "php ./vendor/bin/rector process --dry-run --ansi",
+		"test": "php ./vendor/bin/tester -s -p php --colors 1 -C ./tests/Replicator",
+		"ci": "[\"@lint\", \"@phpstan\", \"@ecs\", \"@rector\", \"@test\"]"
 	}
 }
