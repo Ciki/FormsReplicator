@@ -11,12 +11,9 @@
 namespace Kdyby\Replicator;
 
 use Closure;
-use Iterator;
 use Nette;
 use ReflectionClass;
-use SplObjectStorage;
-use Traversable;
-
+use WeakMap;
 
 /**
  * @author Filip Procházka <filip@prochazka.su>
@@ -24,6 +21,8 @@ use Traversable;
  *
  * @method Nette\Application\UI\Form getForm()
  * @property Nette\Forms\Container $parent
+ *
+ * @phpstan-consistent-constructor
  */
 class Container extends Nette\Forms\Container
 {
@@ -39,8 +38,14 @@ class Container extends Nette\Forms\Container
 
 	private bool $submittedBy = false;
 
+	/**
+	 * @var array<string, Nette\Forms\Container>
+	 */
 	private array $created = [];
 
+	/**
+	 * @var ?array<string, array<string, mixed>>
+	 */
 	private ?array $httpPost = null;
 
 
@@ -55,7 +60,7 @@ class Container extends Nette\Forms\Container
 		try {
 			$this->factoryCallback = Closure::fromCallable($factory);
 		} catch (Nette\InvalidArgumentException $e) {
-			$type = is_object($factory) ? 'instanceof ' . get_class($factory) : gettype($factory);
+			$type = is_object($factory) ? 'instanceof ' . $factory::class : gettype($factory);
 			throw new Nette\InvalidArgumentException(
 				'Replicator requires callable factory, ' . $type . ' given.',
 				0,
@@ -95,20 +100,25 @@ class Container extends Nette\Forms\Container
 
 
 	/**
-	 * @return Iterator|Nette\Forms\Container[]
+	 * @return array<Nette\Forms\Container>
 	 */
-	public function getContainers(bool $recursive = false): Iterator
+	public function getContainers(bool $recursive = false): array
 	{
-		return $this->getComponents($recursive, \Nette\Forms\Container::class);
+		return array_filter(
+			$recursive ? $this->getComponentTree() : $this->getComponents(),
+			fn ($component): bool => $component instanceof \Nette\Forms\Container,
+		);
 	}
 
-
 	/**
-	 * @return Iterator|Nette\Forms\Controls\SubmitButton[]
+	 * @return array<Nette\Forms\Controls\SubmitButton>
 	 */
-	public function getButtons(bool $recursive = false): Iterator
+	public function getButtons(bool $recursive = false): array
 	{
-		return $this->getComponents($recursive, Nette\Forms\SubmitterControl::class);
+		return array_filter(
+			$recursive ? $this->getComponentTree() : $this->getComponents(),
+			fn ($component): bool => $component instanceof Nette\Forms\Controls\SubmitButton,
+		);
 	}
 
 
@@ -131,10 +141,13 @@ class Container extends Nette\Forms\Container
 
 	private function getFirstControlName(): ?string
 	{
-		$controls = iterator_to_array($this->getComponents(false, Nette\Forms\Control::class));
+		$controls = array_filter(
+			$this->getComponents(),
+			fn ($component): bool => $component instanceof Nette\Forms\Control,
+		);
 		$firstControl = reset($controls);
 
-		return $firstControl ? $firstControl->name : null;
+		return $firstControl ? $firstControl->getName() : null;
 	}
 
 
@@ -170,27 +183,25 @@ class Container extends Nette\Forms\Container
 		if ($name === null) {
 			$names = array_keys(iterator_to_array($this->getContainers()));
 			$name = $names ? max($names) + 1 : 0;
+			$name = (string) $name;
 		}
 
 		// Container is overriden, therefore every request for getComponent($name, false) would return container
 		if (isset($this->created[$name])) {
-			throw new Nette\InvalidArgumentException("Container with name '$name' already exists.");
+			throw new Nette\InvalidArgumentException("Container with name '{$name}' already exists.");
 		}
 
-		return $this[$name];
+		return $this->getComponent($name);
 	}
 
-
 	/**
-	 * @param array|Traversable $values
-	 *
-	 * @return Nette\Forms\Container|Container
+	 * @param iterable<string, iterable<string, mixed>> $values
 	 */
-	public function setValues($values, bool $erase = false, bool $onlyDisabled = false)
+	public function setValues(array|object $values, bool $erase = false, bool $onlyDisabled = false): static
 	{
-		if (!$this->form->isAnchored() || !$this->form->isSubmitted()) {
+		if (!$this->form?->isAnchored() || !$this->form->isSubmitted()) {
 			foreach ($values as $name => $value) {
-				if ((is_array($value) || $value instanceof Traversable) && !$this->getComponent($name, false)) {
+				if ((is_iterable($value)) && !$this->getComponent($name, false)) {
 					$this->createOne($name);
 				}
 			}
@@ -210,7 +221,7 @@ class Container extends Nette\Forms\Container
 		}
 
 		foreach ((array) $this->getHttpData() as $name => $value) {
-			if ((is_array($value) || $value instanceof Traversable) && !$this->getComponent($name, false)) {
+			if ((is_iterable($value)) && !$this->getComponent($name, false)) {
 				$this->createOne($name);
 			}
 		}
@@ -228,7 +239,7 @@ class Container extends Nette\Forms\Container
 
 		if (!$this->getForm()->isSubmitted()) {
 			foreach (range(0, $this->createDefault - 1) as $key) {
-				$this->createOne($key);
+				$this->createOne((string) $key);
 			}
 		} elseif ($this->forceDefault) {
 			while (iterator_count($this->getContainers()) < $this->createDefault) {
@@ -237,15 +248,19 @@ class Container extends Nette\Forms\Container
 		}
 	}
 
-
 	/**
-	 * @return mixed|null
+	 * @return ?array<string, array<string, mixed>>
 	 */
-	private function getHttpData()
+	private function getHttpData(): ?array
 	{
 		if ($this->httpPost === null) {
-			$path = explode(self::NAME_SEPARATOR, $this->lookupPath(Nette\Forms\Form::class));
-			$this->httpPost = Nette\Utils\Arrays::get($this->getForm()->getHttpData(), $path, null);
+			$path = explode(self::NameSeparator, $this->lookupPath(Nette\Forms\Form::class));
+			/** @var array<string, mixed> */ // See https://github.com/nette/forms/pull/333
+			$httpData = $this->getForm()
+				->getHttpData();
+			/** @var ?array<string, array<string, mixed>> */
+			$httpPost = Nette\Utils\Arrays::get($httpData, $path, null);
+			$this->httpPost = $httpPost;
 		}
 
 		return $this->httpPost;
@@ -262,7 +277,11 @@ class Container extends Nette\Forms\Container
 		}
 
 		// to check if form was submitted by this one
-		foreach ($container->getComponents(true, Nette\Forms\SubmitterControl::class) as $button) {
+		$buttons = array_filter(
+			$container->getComponentTree(),
+			fn ($component): bool => $component instanceof Nette\Forms\SubmitterControl,
+		);
+		foreach ($buttons as $button) {
 			/** @var Nette\Forms\Controls\SubmitButton $button */
 			if ($button->isSubmittedBy()) {
 				$this->submittedBy = true;
@@ -271,23 +290,22 @@ class Container extends Nette\Forms\Container
 		}
 
 		/** @var Nette\Forms\Controls\BaseControl[] $components */
-		$components = $container->getComponents(true);
+		$components = $container->getComponentTree();
 		$this->removeComponent($container);
 
 		// reflection is required to hack form groups
 		$groupRefl = new ReflectionClass(Nette\Forms\ControlGroup::class);
 		$controlsProperty = $groupRefl->getProperty('controls');
-		$controlsProperty->setAccessible(true);
 
 		// walk groups and clean then from removed components
 		$affected = [];
 		foreach ($this->getForm()->getGroups() as $group) {
-			/** @var SplObjectStorage $groupControls */
+			/** @var WeakMap<Nette\Forms\Control, null> $groupControls */
 			$groupControls = $controlsProperty->getValue($group);
 
 			foreach ($components as $control) {
-				if ($groupControls->contains($control)) {
-					$groupControls->detach($control);
+				if ($groupControls->offsetExists($control)) {
+					unset($groupControls[$control]);
 
 					if (!in_array($group, $affected, true)) {
 						$affected[] = $group;
@@ -298,7 +316,12 @@ class Container extends Nette\Forms\Container
 
 		// remove affected & empty groups
 		if ($cleanUpGroups && $affected) {
-			foreach ($this->getForm()->getComponents(false, Nette\Forms\Container::class) as $cont) {
+			$containers = array_filter(
+				$this->getForm()
+					->getComponents(),
+				fn ($component): bool => $component instanceof Nette\Forms\Container,
+			);
+			foreach ($containers as $cont) {
 				if ($index = array_search($cont->currentGroup, $affected, true)) {
 					unset($affected[$index]);
 				}
@@ -316,6 +339,9 @@ class Container extends Nette\Forms\Container
 
 	/**
 	 * Counts filled values, filtered by given names
+	 *
+	 * @param array<string> $components
+	 * @param array<string> $subComponents
 	 */
 	public function countFilledWithout(array $components = [], array $subComponents = []): int
 	{
@@ -328,12 +354,16 @@ class Container extends Nette\Forms\Container
 		$rows = [];
 		$subComponents = array_flip($subComponents);
 		foreach ($httpData as $item) {
-			$filter = function ($value) use (&$filter) {
+			$filter = function ($value) use (&$filter): bool {
 				if (is_array($value)) {
 					return count(array_filter($value, $filter)) > 0;
 				}
 
-				return strlen($value);
+				if (is_string($value)) {
+					return strlen($value) > 0;
+				}
+
+				return true;
 			};
 			$rows[] = array_filter(array_diff_key($item, $subComponents), $filter) ?: false;
 		}
@@ -341,19 +371,31 @@ class Container extends Nette\Forms\Container
 		return count(array_filter($rows));
 	}
 
-
+	/**
+	 * @param array<string> $exceptChildren
+	 */
 	public function isAllFilled(array $exceptChildren = []): bool
 	{
 		$components = [];
-		foreach ($this->getComponents(false, Nette\Forms\Control::class) as $control) {
-			/** @var Nette\Forms\Controls\BaseControl $control */
-			$components[] = $control->getName();
+		$controls = array_filter(
+			$this->getComponents(),
+			fn ($component): bool => $component instanceof Nette\Forms\Control,
+		);
+		foreach ($controls as $control) {
+			if (($name = $control->getName()) !== null) {
+				$components[] = $name;
+			}
 		}
 
 		foreach ($this->getContainers() as $container) {
-			foreach ($container->getComponents(true, Nette\Forms\SubmitterControl::class) as $button) {
-				/** @var Nette\Forms\Controls\SubmitButton $button */
-				$exceptChildren[] = $button->getName();
+			$buttons = array_filter(
+				$container->getComponentTree(),
+				fn ($component): bool => $component instanceof Nette\Forms\SubmitterControl,
+			);
+			foreach ($buttons as $button) {
+				if (($name = $button->getName()) !== null) {
+					$exceptChildren[] = $name;
+				}
 			}
 		}
 
@@ -362,14 +404,13 @@ class Container extends Nette\Forms\Container
 		return $filled === iterator_count($this->getContainers());
 	}
 
-
-	public function addContainer($name): Nette\Forms\Container
+	public function addContainer(string|int $name): Nette\Forms\Container
 	{
-		return $this[$name] = new $this->containerClass;
+		return $this[(string) $name] = new $this->containerClass;
 	}
 
 
-	public function addComponent(Nette\ComponentModel\IComponent $component, ?string $name, ?string $insertBefore = null): Nette\ComponentModel\IContainer
+	public function addComponent(Nette\ComponentModel\IComponent $component, ?string $name, ?string $insertBefore = null): static
 	{
 		$group = $this->currentGroup;
 		$this->currentGroup = null;
@@ -379,29 +420,27 @@ class Container extends Nette\Forms\Container
 		return $this;
 	}
 
-
-	private static bool $registered = false;
-
+	private static ?string $registered = null;
 
 	public static function register(string $methodName = 'addDynamic'): void
 	{
-		if (self::$registered) {
+		if (self::$registered !== null) {
 			Nette\Forms\Container::extensionMethod(self::$registered, function () {
-				throw new Nette\MemberAccessException;
+				throw new Nette\MemberAccessException();
 			});
 		}
 
 		Nette\Forms\Container::extensionMethod(
 			$methodName,
 			function (Nette\Forms\Container $_this, string $name, callable $factory, int $createDefault = 0, bool $forceDefault = false) {
-				$control = new Container($factory, $createDefault, $forceDefault);
+				$control = new static($factory, $createDefault, $forceDefault);
 				$control->currentGroup = $_this->currentGroup;
 
 				return $_this[$name] = $control;
 			}
 		);
 
-		if (self::$registered) {
+		if (self::$registered !== null) {
 			return;
 		}
 
@@ -410,15 +449,17 @@ class Container extends Nette\Forms\Container
 			function (Nette\Forms\Controls\SubmitButton $_this, ?callable $callback = null) {
 				$_this->setValidationScope([]);
 				$_this->onClick[] = function (Nette\Forms\Controls\SubmitButton $button) use ($callback) {
-					/** @var Container $replicator */
-					$replicator = $button->lookup(Container::class);
+					/** @var self $replicator */
+					$replicator = $button->lookup(static::class);
+					$container = $button->parent;
+					\assert($container instanceof Nette\ComponentModel\Container);
 					if (is_callable($callback)) {
-						$callback($replicator, $button->parent);
+						$callback($replicator, $container);
 					}
 					if ($form = $button->getForm(false)) {
 						$form->onSuccess = [];
 					}
-					$replicator->remove($button->parent);
+					$replicator->remove($container);
 				};
 
 				return $_this;
@@ -429,19 +470,16 @@ class Container extends Nette\Forms\Container
 			'addCreateOnClick',
 			function (Nette\Forms\Controls\SubmitButton $_this, bool $allowEmpty = false, ?callable $callback = null) {
 				$_this->onClick[] = function (Nette\Forms\Controls\SubmitButton $button) use ($allowEmpty, $callback) {
-					/** @var Container $replicator */
-					$replicator = $button->lookup(Container::class);
-					if (!is_bool($allowEmpty)) {
-						$callback = Closure::fromCallable($allowEmpty);
-						$allowEmpty = false;
-					}
-					if ($allowEmpty === true || $replicator->isAllFilled() === true) {
+					/** @var self $replicator */
+					$replicator = $button->lookup(static::class);
+					if ($allowEmpty || $replicator->isAllFilled() === true) {
 						$newContainer = $replicator->createOne();
-						if (is_callable($callback)) {
+						if ($callback !== null) {
 							$callback($replicator, $newContainer);
 						}
 					}
-					$button->getForm()->onSuccess = [];
+					$button->getForm()
+						->onSuccess = [];
 				};
 
 				return $_this;
