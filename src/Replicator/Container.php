@@ -54,8 +54,8 @@ class Container extends Nette\Forms\Container
 	 */
 	public function __construct(callable $factory, int $createDefault = 0, bool $forceDefault = false)
 	{
-		$this->monitor(Nette\Application\UI\Presenter::class);
-		$this->monitor(Nette\Forms\Form::class);
+		$this->monitor(Nette\Application\UI\Presenter::class, $this->whenAttached(...));
+		$this->monitor(Nette\Forms\Form::class, $this->whenAttached(...));
 
 		try {
 			$this->factoryCallback = Closure::fromCallable($factory);
@@ -82,10 +82,8 @@ class Container extends Nette\Forms\Container
 	/**
 	 * Magical component factory
 	 */
-	protected function attached(Nette\ComponentModel\IComponent $obj): void
+	private function whenAttached(Nette\ComponentModel\IComponent $obj): void
 	{
-		parent::attached($obj);
-
 		if (
 			!$obj instanceof Nette\Application\UI\Presenter
 			&&
